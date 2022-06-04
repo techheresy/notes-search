@@ -1,6 +1,5 @@
 import glob
 import logging
-import operator
 import os.path
 import pickle
 import re
