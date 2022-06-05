@@ -28,4 +28,4 @@ class Query:
             check_balanced(symbolpair, query)
 
 
-Query("()()()\"()\"\"")
+Query("()()()\"()\"")
