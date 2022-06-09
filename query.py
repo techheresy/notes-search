@@ -21,11 +21,15 @@ class Query:
     ]
 
     def __init__(self, query: str):
-        self.query = self.validate(query)
+        self.query = query
 
-    def validate(self, query: str) -> None:
+    def validate(self) -> None:
         for symbolpair in self.__symbolpairs__:
-            check_balanced(symbolpair, query)
+            check_balanced(symbolpair, self.query)
+
+    def parse_query(self):
+        pass
 
 
-Query("()()()\"()\"")
+query = Query("()()()\"()\"\"")
+query.validate()

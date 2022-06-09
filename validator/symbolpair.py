@@ -13,6 +13,7 @@ class SymbolPair:
     def equaled(self):
         return self.opening == self.closing
 
+
 class UnbalancedQuery(Exception):
     def __init__(self, query, position: int):
         self.query = query
