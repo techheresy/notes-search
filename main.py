@@ -109,7 +109,7 @@ if __name__ == "__main__":
     build_force = False
 
     if build_force or not os.path.exists(dump_file):
-        logging.info("dump file not found, build revert index...")
+        logging.info("build revert index")
         docs, files_path = [], glob.glob("mock_news/*.txt")
 
         for fp in files_path:
