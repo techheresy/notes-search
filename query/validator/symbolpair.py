@@ -13,8 +13,7 @@ class SymbolPair:
     def equaled(self):
         return self.opening == self.closing
 
-
-class UnbalancedQuery(Exception):
+class MalformedQuery(Exception):
     def __init__(self, query, position: int):
         self.query = query
         self.position = position
@@ -28,7 +27,7 @@ class UnbalancedQuery(Exception):
 def check_balanced(symbolpair: SymbolPair, query: str):
     if symbolpair.equaled:
         if query.count(symbolpair.opening) % 2 != 0:
-            raise UnbalancedQuery(query, query.rfind(symbolpair.opening))
+            raise MalformedQuery(query, query.rfind(symbolpair.opening))
         return
 
     stack = []
@@ -39,12 +38,12 @@ def check_balanced(symbolpair: SymbolPair, query: str):
 
         elif char == symbolpair.closing:
             if not stack:
-                raise UnbalancedQuery(query, position)
+                raise MalformedQuery(query, position)
             if not _compare(symbolpair, stack.pop(), char):
-                raise UnbalancedQuery(query, position)
+                raise MalformedQuery(query, position)
 
     if stack:
-        raise UnbalancedQuery(query, position)
+        raise ValueError("Query malformed")
 
 
 def _compare(symbolpair: SymbolPair, opening: str, closing: str) -> bool:

@@ -1,61 +1,78 @@
-"""
-функционал поиска:
-  1. поиск слов
-  2. ранжирование: как далеко слова могут быть друг от друга
-  3. вывод сниппитов результата поиска
-* 4. точный поиск: слово обернуто в ковычки, нужен отдельный индекс без нормализации
-
-алгоритм поиска слов:
-1. валидация query: подсчет скобок, (*ковычек)
-2. подготовить query к парсингу: нормализация, нижний регистр
-3. найти все вхождения NOT, NOT OR, NOT AND, OR, AND
-4. обход по дереву и выполняем правую часть запроса
-"""
 import re
+from abc import abstractmethod
 
-from validator.symbolpair import SymbolPair, check_balanced
+from validator.symbolpair import SymbolPair, check_balanced, MalformedQuery
 
 
 class Entry:
-    def __init__(self, entry):
+    def __init__(self, entry, invert=False):
         self.entry = entry
+        self.invert = invert
 
     def __repr__(self):
-        return self.entry
+        return f"{'!' if self.invert else ''}{self.entry}"
+
+    def evaluate(self, doc):
+        pass
 
 
 class Binary:
     __parse_symbol__ = None
 
-    def __init__(self, left, right):
+    def __init__(self, left, right, invert=False):
         self.left = left
-        self.rigth = right
+        self.right = right
+        self.invert = invert
 
     def __repr__(self):
-        return f"{self.left} {self.__parse_symbol__} {self.rigth}"
+        return f"{'!' if self.invert else ''}({self.left} {self.__parse_symbol__} {self.right})"
+
+    @abstractmethod
+    def evaluate(self, doc):
+        raise NotImplemented
 
 
 class NotAnd(Binary):
     __parse_symbol__ = "!|"
 
-
-class NotOr(Binary):
-    __parse_symbol__ = "!&"
-
-
-class Not(Binary):
-    __parse_symbol__ = "!"
+    def evaluate(self, doc):
+        if not self.left.evaluate(doc):
+            return False
+        return not self.right.evaluate(doc)
 
 
 class And(Binary):
     __parse_symbol__ = "&"
 
+    def evaluate(self, doc):
+        if not self.left.evaluate(doc) or not self.right.evaluate(doc):
+            return False
+        return True
+
+
+class NotOr(Binary):
+    __parse_symbol__ = "!&"
+
+    def evaluate(self, doc):
+        if self.left.evaluate(doc) or self.right.evaluate(doc):
+            return False
+        return True
+
 
 class Or(Binary):
     __parse_symbol__ = "|"
 
+    def evaluate(self, doc):
+        if self.left.evaluate(doc) or self.right.evaluate(doc):
+            return True
+        return False
 
-operator_map = {o.__parse_symbol__: o for o in [Not, NotOr, NotAnd, Or, And]}
+
+# class Not:
+#     __parse_symbol__ = "!"
+
+
+operator_map = {o.__parse_symbol__: o for o in [NotOr, NotAnd, Or, And]}
 
 operator_patterns = [re.escape(o) for o in operator_map.keys()]
 operator_patterns.sort(key=lambda o: len(o), reverse=True)
@@ -65,38 +82,120 @@ group_search_pattern = "|".join(re.escape(g) for g in ["(", ")"])
 search_pattern = f"{operator_search_pattern}|{group_search_pattern}"
 
 
-class Query:
-    __symbolpairs__ = [
-        SymbolPair("(", ")"),
-        SymbolPair("\"", "\""),
-    ]
+class SearchTree:
+    __symbolpairs__ = {
+        "group": SymbolPair("(", ")"),
+    }
 
-    def __init__(self, query: str):
-        self.query = query
+    def __init__(self):
+        self.search_tree = None
 
-    def validate(self) -> None:
-        for symbolpair in self.__symbolpairs__:
-            check_balanced(symbolpair, self.query)
+    def check_balance(self, query, raising=False) -> bool:
+        for symbolpair in self.__symbolpairs__.values():
+            try:
+                check_balanced(symbolpair, query)
+            except Exception as e:
+                if raising:
+                    raise e
+                return False
+        return True
+
+    def check_malformed_near_symbolpair(self, query):
+        symbolpair = self.__symbolpairs__.get("group")
+        service_symbols = [" ", "(", ")"]
+        bidirectional_symbols = [*operator_map.keys(), *service_symbols]
+        forward_symbols = ["!", *service_symbols]
+
+        for idx, symbol in enumerate(query):
+            if symbol == symbolpair.opening:
+                if idx:
+                    count = 1
+                    while True:
+                        index = idx - count
+                        if index != -1:
+                            stepback = query[index]
+                            count += 1
+                            if stepback in operator_map.keys():
+                                break
+                            if stepback not in forward_symbols:
+                                raise MalformedQuery(query, index)
+                        else:
+                            break
+            if symbol == symbolpair.closing:
+                count = 1
+                while True:
+                    index = idx + count
+                    if index != len(query):
+                        stepforward = query[index]
+                        count += 1
+                        if stepforward in operator_map.keys():
+                            break
+                        if stepforward not in bidirectional_symbols:
+                            raise MalformedQuery(query, index)
+                    else:
+                        break
+
+    def strip_group(self, query):
+        query = query.strip()
+
+        symbolpair = self.__symbolpairs__.get("group")
+        count_opening = 0
+
+        for i in range(len(query) - 1):
+            symbol = query[i]
+
+            if symbol == symbolpair.opening:
+                count_opening += 1
+            elif symbol == symbolpair.closing:
+                count_opening -= 1
+
+            if i > 0 and count_opening == 0:
+                return query
+
+        if query[0] == symbolpair.opening and query[-1] == symbolpair.closing:
+            return query[1:-1]
+        return query
 
     def parse(self, query):
-        q = query.strip()
-        q_start = 0
-        q_end = len(q)
+        operator, query_part = None, None
 
-        for o in re.finditer(search_pattern, q):
-            if operator := operator_map.get(o.group()):
-                return operator(
-                    left=self.parse(q[q_start:o.start()]),
-                    right=self.parse(q[o.end():q_end])
-                )
-        return Entry(q)
+        query_start = 0
+        query_end = len(query)
+
+        for o in re.finditer(operator_search_pattern, query):
+            query_part = query[query_start:o.start()]
+            if self.check_balance(query_part):
+                operator = o
+                break
+
+        if not operator and self.check_balance(query, raising=True):
+            return Entry(query)
+
+        left_part = self.strip_group(query[query_start:operator.start()])
+        right_part = self.strip_group(query[operator.end():query_end])
+
+        if operator and (operator_class := operator_map.get(operator.group())):
+            return operator_class(
+                left=self.parse(left_part),
+                right=self.parse(right_part)
+            )
+
+    def prepare_query(self, query):
+        query = query.strip()
+        self.check_malformed_near_symbolpair(query)
+        self.check_balance(query, raising=True)
+        return self.strip_group(query)
+
+    def build_from_query(self, query):
+        query = self.prepare_query(query)
+        self.search_tree = self.parse(query)
+        return self.search_tree
 
 
 test_queries = [
     ## nodes
-    "word2 | word3 | word4 & word5",
-    # "(word & word) | (word & word)",
-    # "word & (word | word)",
+    "((word1 | word2) | word3) & ((word1 | word2) | word3) & (word4 & word5) ошибка",
+    "ошибка    (word & word2)",
 
     ## not
     # "!word & !word",
@@ -107,8 +206,7 @@ test_queries = [
     # "!'word'",
     # "'word' & 'word'",
 ]
-for q in test_queries:
-    query = Query(q)
-    query.validate()
-    search_tree = query.parse(q)
-    print(search_tree)
+for test_query in test_queries:
+    print(test_query)
+    search_tree = SearchTree()
+    search_tree.build_from_query(test_query)
